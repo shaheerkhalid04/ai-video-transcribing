@@ -1,0 +1,52 @@
+"""
+Configuration for the video search + transcription agent.
+
+All the "settings" of the project live here so the rest of the code stays
+simple. If you want to swap a model or change the wording of a prompt, this
+is the only file you need to touch.
+"""
+
+# The Groq model that acts as the agent's "brain". It reads the request,
+# decides which tool to call, and writes the final answer. It must be a
+# model that supports tool calling. See https://console.groq.com/docs/tool-use
+AGENT_MODEL = "llama-3.3-70b-versatile"
+
+# The Gemini multimodal model that actually watches the video and writes the
+# transcript. This model accepts a public YouTube URL directly.
+# "gemini-flash-latest" always points at the current fast Gemini model, so
+# the code keeps working when a specific version is retired.
+TRANSCRIBE_MODEL = "gemini-flash-latest"
+
+# The instruction we send to Gemini. We ask for a plain transcript only, so
+# the agent never has to "make up" a summary of the video on its own.
+TRANSCRIBE_PROMPT = (
+    "Transcribe the spoken words in this video into clean, readable text. "
+    "Write only the transcript of what is actually said, in order. "
+    "Do not summarize, translate, or add any commentary of your own."
+)
+
+# The system prompt that tells the agent how to behave. The rules matter:
+# the whole point of the assignment is that the transcript comes from the
+# TranscriptionTool, not from the agent inventing one.
+SYSTEM_PROMPT = (
+    "You are a research assistant that has two tools:\n"
+    "  1. video_search      - find a YouTube video about a topic.\n"
+    "  2. transcribe_video  - get the transcript of a video URL.\n\n"
+    "To handle a request you MUST:\n"
+    "  - First call video_search to find one relevant video.\n"
+    "  - Then call transcribe_video on that video's URL to get its "
+    "transcript.\n\n"
+    "Rules you must always follow:\n"
+    "  - Never write the transcript yourself. The transcript may ONLY come "
+    "from the transcribe_video tool.\n"
+    "  - Do not summarize, shorten, or reword the transcript. Return it "
+    "exactly as the tool produced it.\n"
+    "  - End your final answer with a line in this exact form:\n"
+    "        Source: <the video url>"
+)
+
+# Safety limit so a confused model cannot loop forever calling tools.
+MAX_STEPS = 6
+
+# Where transcripts (our little "knowledge base") are saved.
+KNOWLEDGE_BASE_DIR = "knowledge_base"

@@ -1,0 +1,14 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Generated transcripts (keep the folder, not its contents)
+knowledge_base/*.txt
+
+# OS
+.DS_Store

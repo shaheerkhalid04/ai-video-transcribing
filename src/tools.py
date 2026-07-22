@@ -1,0 +1,216 @@
+"""
+The two tools our AI agent can call.
+
+Tool 1: video_search(query)     -> finds a YouTube video with SerpApi and
+                                   returns its title and URL.
+Tool 2: transcribe_video(url)   -> transcribes that video with the Gemini
+                                   API and saves the transcript to the
+                                   knowledge_base folder.
+
+Each tool is a plain Python function. Below the functions we also describe
+the tools in the JSON format that Groq's tool-calling API expects, plus a
+small dispatch helper (run_tool) so the agent can call a tool by name.
+"""
+
+import os
+import re
+import json
+import datetime
+
+import requests
+
+import config
+
+
+def video_search(query):
+    """
+    Search YouTube through SerpApi and return the first result.
+
+    Returns a dict: {"title": ..., "url": ...}.
+    Raises a RuntimeError with a readable message on failure.
+    """
+    api_key = os.environ.get("SERPAPI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "SERPAPI_API_KEY is not set. "
+            "Copy .env.example to .env and paste in your key."
+        )
+
+    # SerpApi's "youtube" engine returns YouTube search results as JSON.
+    params = {
+        "engine": "youtube",
+        "search_query": query,
+        "api_key": api_key,
+    }
+    response = requests.get(
+        "https://serpapi.com/search.json", params=params, timeout=60
+    )
+    response.raise_for_status()
+    data = response.json()
+
+    results = data.get("video_results", [])
+    if not results:
+        raise RuntimeError("SerpApi found no videos for: " + query)
+
+    top = results[0]
+    url = top.get("link")
+    if not url:
+        raise RuntimeError("The top SerpApi result had no video link.")
+
+    return {"title": top.get("title", "(no title)"), "url": url}
+
+
+def transcribe_video(url):
+    """
+    Transcribe a public YouTube video with Gemini and save the transcript.
+
+    Returns a dict with the url, the transcript text, and the file it was
+    saved to. Raises a RuntimeError with a readable message on failure.
+    """
+    # Imported here so the script still starts even if the library is only
+    # needed for this one tool.
+    from google import genai
+    from google.genai import types
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not set. "
+            "Copy .env.example to .env and paste in your key."
+        )
+
+    client = genai.Client(api_key=api_key)
+
+    # We hand Gemini the YouTube URL directly (as a "file" part) plus our
+    # transcription instruction, and let its multimodal model do the work.
+    # A big output limit leaves room for a long transcript.
+    response = client.models.generate_content(
+        model=config.TRANSCRIBE_MODEL,
+        contents=types.Content(
+            parts=[
+                types.Part(file_data=types.FileData(file_uri=url)),
+                types.Part(text=config.TRANSCRIBE_PROMPT),
+            ]
+        ),
+        config=types.GenerateContentConfig(max_output_tokens=32000),
+    )
+
+    transcript = (response.text or "").strip()
+    if not transcript:
+        # Explain WHY it was empty instead of a vague "try again". The most
+        # common reason is Gemini's RECITATION filter, which blocks verbatim
+        # transcripts of videos it recognizes (popular videos with indexed
+        # captions). Less-indexed / shorter videos usually go through.
+        reason = _finish_reason(response)
+        if reason == "RECITATION":
+            raise RuntimeError(
+                "Gemini blocked this transcript (RECITATION): it will not "
+                "reproduce the full text of a video it recognizes. Try a "
+                "different or less well-known video."
+            )
+        raise RuntimeError(
+            "Gemini returned no transcript (finish reason: " + reason + ")."
+        )
+
+    saved_to = save_transcript(url, transcript)
+    return {"url": url, "transcript": transcript, "saved_to": saved_to}
+
+
+def _finish_reason(response):
+    """Return the model's finish reason as a plain string (best effort)."""
+    try:
+        return str(response.candidates[0].finish_reason.name)
+    except Exception:
+        return "UNKNOWN"
+
+
+def save_transcript(url, transcript):
+    """Save one transcript to knowledge_base/<time>_<video-id>.txt."""
+    os.makedirs(config.KNOWLEDGE_BASE_DIR, exist_ok=True)
+
+    # Build a tidy filename from the current time and the YouTube video id.
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    video_id = _video_id(url)
+    filename = os.path.join(
+        config.KNOWLEDGE_BASE_DIR, stamp + "_" + video_id + ".txt"
+    )
+
+    with open(filename, "w", encoding="utf-8") as f:
+        # Keep the source URL inside the file too, so a saved transcript is
+        # always traceable back to its video.
+        f.write("Source: " + url + "\n")
+        f.write("Transcribed: " + stamp + "\n")
+        f.write("-" * 40 + "\n\n")
+        f.write(transcript + "\n")
+
+    return filename
+
+
+def _video_id(url):
+    """Pull the YouTube video id out of a URL (best effort, for filenames)."""
+    match = re.search(r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{11})", url)
+    return match.group(1) if match else "video"
+
+
+# ---------------------------------------------------------------------------
+# Tool descriptions and dispatch for the Groq agent.
+# ---------------------------------------------------------------------------
+
+# This is the JSON schema Groq needs so the model knows the tools exist and
+# what arguments each one takes. The "name" here must match the Python
+# function names in TOOL_FUNCTIONS below.
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "video_search",
+            "description": (
+                "Search YouTube for a video about a topic and return the "
+                "top result's title and URL."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "What to search for on YouTube.",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "transcribe_video",
+            "description": (
+                "Transcribe a public YouTube video from its URL and save the "
+                "transcript. Returns the full transcript text."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The YouTube video URL to transcribe.",
+                    }
+                },
+                "required": ["url"],
+            },
+        },
+    },
+]
+
+# Lookup table so the agent can run a tool by the name the model gave us.
+TOOL_FUNCTIONS = {
+    "video_search": video_search,
+    "transcribe_video": transcribe_video,
+}
+
+
+def run_tool(name, args):
+    """Run the tool called `name` with the dict of `args` from the model."""
+    if name not in TOOL_FUNCTIONS:
+        raise RuntimeError("Unknown tool: " + name)
+    return TOOL_FUNCTIONS[name](**args)
