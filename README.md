@@ -6,7 +6,9 @@ writes the transcript itself; it only decides which tool to run and when. The
 transcript always comes from the transcription tool, and every result ends
 with the source video URL.
 
-It comes with both a **command-line script** and a small **web page**.
+It comes with both a **command-line script** and a **web app**.
+
+**Live demo: <https://ai-video-transcribing.vercel.app>**
 
 ![tools: SerpApi search, Gemini transcription, Groq agent](https://img.shields.io/badge/tools-SerpApi%20%C2%B7%20Gemini%20%C2%B7%20Groq-7c5cff)
 
@@ -50,6 +52,9 @@ only ever transcribes the video it actually searched for.
 ```
 ai-video-transcribing/
 ├── app.py                     # web frontend (Flask)
+├── api/
+│   └── index.py               # entry point used when hosted on Vercel
+├── vercel.json                # hosting config
 ├── templates/
 │   └── index.html             # the page
 ├── static/
@@ -130,6 +135,43 @@ Source: https://www.youtube.com/watch?v=rf60MejMz3E
 
 Each transcript is also saved in `knowledge_base/` with its source URL inside
 the file, so it is always traceable back to the video.
+
+## Deploying
+
+The app is hosted on Vercel at
+<https://ai-video-transcribing.vercel.app>. To deploy your own copy:
+
+1. Install the CLI and log in:
+
+   ```
+   npm i -g vercel
+   vercel login
+   ```
+
+2. From the project folder, link and deploy:
+
+   ```
+   vercel link
+   vercel deploy --prod
+   ```
+
+3. Add the same three keys as environment variables, so the hosted app can
+   reach the APIs:
+
+   ```
+   vercel env add GROQ_API_KEY production
+   vercel env add GEMINI_API_KEY production
+   vercel env add SERPAPI_API_KEY production
+   ```
+
+`api/index.py` is the entry point Vercel uses, and `vercel.json` routes every
+request to it. Because hosted filesystems are read-only, transcripts are
+written to a temporary folder there instead of `knowledge_base/`; running
+locally still saves them to `knowledge_base/` as normal.
+
+> **Note on hosting limits:** a Vercel function can run for up to 60 seconds
+> on the free plan. Short videos finish comfortably; a long video can hit
+> that limit, and the page will say so. Running locally has no time limit.
 
 ## Notes
 
