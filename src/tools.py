@@ -16,6 +16,7 @@ import os
 import re
 import json
 import datetime
+import tempfile
 
 import requests
 
@@ -125,25 +126,39 @@ def _finish_reason(response):
 
 
 def save_transcript(url, transcript):
-    """Save one transcript to knowledge_base/<time>_<video-id>.txt."""
-    os.makedirs(config.KNOWLEDGE_BASE_DIR, exist_ok=True)
+    """
+    Save one transcript to knowledge_base/<time>_<video-id>.txt.
 
+    When the app runs on a hosting platform the project folder is usually
+    read-only, so we fall back to the system temp folder instead of
+    crashing. Saving is a nice-to-have; the transcript is returned either
+    way.
+    """
     # Build a tidy filename from the current time and the YouTube video id.
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    video_id = _video_id(url)
-    filename = os.path.join(
-        config.KNOWLEDGE_BASE_DIR, stamp + "_" + video_id + ".txt"
+    name = stamp + "_" + _video_id(url) + ".txt"
+
+    body = (
+        "Source: " + url + "\n"
+        + "Transcribed: " + stamp + "\n"
+        + "-" * 40 + "\n\n"
+        + transcript + "\n"
     )
 
-    with open(filename, "w", encoding="utf-8") as f:
-        # Keep the source URL inside the file too, so a saved transcript is
-        # always traceable back to its video.
-        f.write("Source: " + url + "\n")
-        f.write("Transcribed: " + stamp + "\n")
-        f.write("-" * 40 + "\n\n")
-        f.write(transcript + "\n")
+    # Try the project folder first, then a writable temp folder.
+    for folder in (config.KNOWLEDGE_BASE_DIR, tempfile.gettempdir()):
+        try:
+            os.makedirs(folder, exist_ok=True)
+            path = os.path.join(folder, name)
+            with open(path, "w", encoding="utf-8") as f:
+                # Keep the source URL inside the file too, so a saved
+                # transcript is always traceable back to its video.
+                f.write(body)
+            return path
+        except OSError:
+            continue
 
-    return filename
+    return "(not saved: no writable folder)"
 
 
 def _video_id(url):

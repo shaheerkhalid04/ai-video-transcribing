@@ -10,5 +10,8 @@ venv/
 # Generated transcripts (keep the folder, not its contents)
 knowledge_base/*.txt
 
+# Vercel
+.vercel/
+
 # OS
 .DS_Store

@@ -4,52 +4,104 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI Video Transcriber</title>
+  <meta name="description" content="Find a YouTube video on any topic and transcribe it with an AI agent." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>" />
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
+  <div class="glow" aria-hidden="true"></div>
+
   <main class="wrap">
     <header class="head">
+      <span class="eyebrow">AI agent · multi-tool calling</span>
       <h1>AI Video Transcriber</h1>
       <p class="tagline">
-        Type a topic. The agent finds a YouTube video and transcribes it,
-        using two tools it calls on its own.
+        Give it a topic. The agent searches YouTube, then transcribes the
+        video it finds — using two tools it decides to call on its own.
       </p>
-      <div class="tools-badges">
-        <span class="badge">1 · Video search <em>SerpApi</em></span>
-        <span class="badge">2 · Transcription <em>Gemini</em></span>
-        <span class="badge">Agent <em>Groq</em></span>
-      </div>
     </header>
 
-    <form id="form" class="search">
-      <input
-        id="topic"
-        type="text"
-        placeholder="e.g. git explained in 100 seconds"
-        autocomplete="off"
-      />
-      <button id="go" type="submit">Find &amp; Transcribe</button>
-    </form>
-    <p class="hint">Tip: shorter, less well-known videos transcribe best.</p>
+    <div class="pipeline" aria-label="How it works">
+      <div class="pipe-step">
+        <span class="pipe-num">1</span>
+        <div>
+          <strong>Video search</strong>
+          <em>SerpApi</em>
+        </div>
+      </div>
+      <span class="pipe-arrow" aria-hidden="true">→</span>
+      <div class="pipe-step">
+        <span class="pipe-num">2</span>
+        <div>
+          <strong>Transcription</strong>
+          <em>Gemini</em>
+        </div>
+      </div>
+      <span class="pipe-arrow" aria-hidden="true">→</span>
+      <div class="pipe-step ghost">
+        <span class="pipe-num">★</span>
+        <div>
+          <strong>Agent brain</strong>
+          <em>Groq</em>
+        </div>
+      </div>
+    </div>
 
-    <div id="status" class="status" hidden></div>
+    <form id="form" class="search">
+      <div class="field">
+        <svg class="field-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/>
+          <path d="M20 20l-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <input
+          id="topic"
+          type="text"
+          placeholder="e.g. recursion in 100 seconds"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+      <button id="go" type="submit">
+        <span class="go-label">Find &amp; Transcribe</span>
+      </button>
+    </form>
+
+    <div class="examples">
+      <span class="examples-label">Try:</span>
+      <button class="chip" type="button">recursion in 100 seconds</button>
+      <button class="chip" type="button">what is an API in 60 seconds</button>
+      <button class="chip" type="button">git explained in 100 seconds</button>
+    </div>
+
+    <div id="status" class="status" hidden>
+      <span class="spinner" aria-hidden="true"></span>
+      <span id="status-text">Starting…</span>
+    </div>
+
     <div id="error" class="error" hidden></div>
 
     <section id="steps-box" class="card" hidden>
-      <h2>Tools used</h2>
+      <h2>Tools the agent called</h2>
       <ol id="steps" class="steps"></ol>
     </section>
 
     <section id="result-box" class="card" hidden>
       <div class="result-head">
-        <h2>Transcript</h2>
+        <div>
+          <h2>Transcript</h2>
+          <p id="meta" class="meta"></p>
+        </div>
         <div class="result-actions">
-          <a id="source" class="source" href="#" target="_blank" rel="noopener">Source</a>
-          <button id="copy" class="copy" type="button">Copy</button>
+          <a id="source" class="btn-ghost" href="#" target="_blank" rel="noopener">Source ↗</a>
+          <button id="copy" class="btn-ghost" type="button">Copy</button>
         </div>
       </div>
       <pre id="transcript" class="transcript"></pre>
     </section>
+
+    <footer class="foot">
+      <p>Transcripts come from the transcription tool — never written by the agent itself.</p>
+    </footer>
   </main>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>
