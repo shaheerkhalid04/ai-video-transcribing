@@ -18,3 +18,4 @@ knowledge_base/*.txt
 
 # OS
 .DS_Store
+.pytest_cache/

@@ -25,9 +25,10 @@ import config
 
 def video_search(query):
     """
-    Search YouTube through SerpApi and return the first result.
+    Search YouTube through SerpApi and return the first result that is no
+    longer than config.MAX_VIDEO_SECONDS, so transcription fits the time limit.
 
-    Returns a dict: {"title": ..., "url": ...}.
+    Returns a dict: {"title": ..., "url": ..., "seconds": ...}.
     Raises a RuntimeError with a readable message on failure.
     """
     api_key = os.environ.get("SERPAPI_API_KEY")
@@ -53,12 +54,30 @@ def video_search(query):
     if not results:
         raise RuntimeError("SerpApi found no videos for: " + query)
 
-    top = results[0]
-    url = top.get("link")
-    if not url:
-        raise RuntimeError("The top SerpApi result had no video link.")
+    # Only take a video short enough to transcribe inside the time limit.
+    for result in results:
+        url = result.get("link")
+        seconds = _duration_seconds(result.get("length"))
+        if url and seconds is not None and seconds <= config.MAX_VIDEO_SECONDS:
+            return {"title": result.get("title", "(no title)"), "url": url, "seconds": seconds}
 
-    return {"title": top.get("title", "(no title)"), "url": url}
+    raise RuntimeError(
+        "No video of " + str(config.MAX_VIDEO_SECONDS // 60) + " minutes or less "
+        "came up for: " + query + ". Try a more specific topic."
+    )
+
+
+def _duration_seconds(length):
+    """'4:32' or '1:02:10' (SerpApi's YouTube length) to seconds; None if unknown."""
+    if not length or not isinstance(length, str):
+        return None
+    parts = length.strip().split(":")
+    if not parts or not all(part.isdigit() for part in parts):
+        return None
+    seconds = 0
+    for part in parts:
+        seconds = seconds * 60 + int(part)
+    return seconds
 
 
 def transcribe_video(url):

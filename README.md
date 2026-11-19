@@ -170,8 +170,36 @@ written to a temporary folder there instead of `knowledge_base/`; running
 locally still saves them to `knowledge_base/` as normal.
 
 > **Note on hosting limits:** a Vercel function can run for up to 60 seconds
-> on the free plan. Short videos finish comfortably; a long video can hit
-> that limit, and the page will say so. Running locally has no time limit.
+> on the free plan. That is why the search tool only picks a video of
+> `MAX_VIDEO_SECONDS` or less (300, so 5 minutes, by default) and skips any
+> result whose length SerpApi does not report. Running locally has no time
+> limit, so raise it there if you like.
+
+### Optional settings
+
+| Variable            | Default               | What it does                                   |
+| ------------------- | --------------------- | ---------------------------------------------- |
+| `GROQ_MODEL`        | `openai/gpt-oss-120b` | The agent's tool-calling model                 |
+| `MAX_VIDEO_SECONDS` | `300`                 | Longest video the search tool will pick        |
+
+Groq retired `llama-3.3-70b-versatile` on 16 Aug 2026, so the default is now
+`openai/gpt-oss-120b`. It reasons before answering, so the agent asks for low
+reasoning effort and never sends that reasoning back on the next step.
+
+### Health check
+
+- `GET /api/health` says the server is up and which model it is set to use.
+- `GET /api/health?verify=1` also makes one tiny real call to that model and
+  returns `{"ok": true, "model": ..., "latency_ms": ...}`, or `ok: false` with
+  the error name if the model cannot be reached.
+
+## Tests
+
+```
+python -m pytest -q
+```
+
+The tests replace Groq and SerpApi with fakes, so they need no keys.
 
 ## Notes
 

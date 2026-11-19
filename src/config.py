@@ -6,10 +6,17 @@ simple. If you want to swap a model or change the wording of a prompt, this
 is the only file you need to touch.
 """
 
+import os
+
 # The Groq model that acts as the agent's "brain". It reads the request,
 # decides which tool to call, and writes the final answer. It must be a
 # model that supports tool calling. See https://console.groq.com/docs/tool-use
-AGENT_MODEL = "llama-3.3-70b-versatile"
+# Groq retired llama-3.3-70b-versatile on 16 Aug 2026; override with GROQ_MODEL.
+AGENT_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
+
+# Only videos at most this long are picked, so a transcription fits inside the
+# serverless time limit.
+MAX_VIDEO_SECONDS = int(os.environ.get("MAX_VIDEO_SECONDS", "300"))
 
 # The Gemini multimodal model that actually watches the video and writes the
 # transcript. This model accepts a public YouTube URL directly.

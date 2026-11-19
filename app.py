@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify
 
 import agent
+import config
 
 # Load the API keys from .env before the agent needs them.
 load_dotenv()
@@ -33,6 +34,24 @@ app = Flask(__name__)
 def index():
     """Serve the single page."""
     return render_template("index.html")
+
+
+@app.route("/health")
+@app.route("/api/health")
+def health():
+    """Liveness by default; ?verify=1 also makes one real call to the agent model.
+
+    A plain 200 only says the server is up. The portfolio treats the demo as
+    live only when verify returns ok with latency_ms.
+    """
+    body = {
+        "ok": True,
+        "model": config.AGENT_MODEL,
+        "max_video_seconds": config.MAX_VIDEO_SECONDS,
+    }
+    if request.args.get("verify") == "1":
+        body = {**body, **agent.verify_model()}
+    return jsonify(body)
 
 
 @app.route("/run", methods=["POST"])
