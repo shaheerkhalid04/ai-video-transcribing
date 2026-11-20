@@ -98,12 +98,12 @@ def transcribe_video(url):
             "Copy .env.example to .env and paste in your key."
         )
 
-    client = _gemini_client(api_key)
+    client = _gemini_client(api_key, config.TRANSCRIBE_TIMEOUT_SECONDS)
 
     # We hand Gemini the YouTube URL directly (as a "file" part) plus our
     # transcription instruction, and let its multimodal model do the work.
     # A big output limit leaves room for a long transcript.
-    response, _ = _generate_with_fallback(
+    response, _, _ = _generate_with_fallback(
         client,
         contents=types.Content(
             parts=[
@@ -111,7 +111,10 @@ def transcribe_video(url):
                 types.Part(text=config.TRANSCRIBE_PROMPT),
             ]
         ),
-        settings=types.GenerateContentConfig(max_output_tokens=32000),
+        settings=types.GenerateContentConfig(
+            max_output_tokens=32000,
+            thinking_config=types.ThinkingConfig(thinking_level=config.TRANSCRIBE_THINKING_LEVEL),
+        ),
     )
 
     transcript = (response.text or "").strip()
@@ -135,20 +138,36 @@ def transcribe_video(url):
     return {"url": url, "transcript": transcript, "saved_to": saved_to}
 
 
-def _gemini_client(api_key):
-    """A Gemini client on the pinned API version (config.GEMINI_API_VERSION)."""
+def _gemini_client(api_key, timeout_seconds):
+    """
+    A Gemini client on the pinned API version (config.GEMINI_API_VERSION).
+
+    The SDK retries a busy or rate-limited model up to five times with
+    growing pauses, which can eat the whole 60 second function limit. Here
+    each call is tried once, with a timeout, and _generate_with_fallback moves
+    on to the next model instead.
+    """
     from google import genai
     from google.genai import types
 
     return genai.Client(
         api_key=api_key,
-        http_options=types.HttpOptions(api_version=config.GEMINI_API_VERSION),
+        http_options=types.HttpOptions(
+            api_version=config.GEMINI_API_VERSION,
+            timeout=int(timeout_seconds * 1000),
+            retry_options=types.HttpRetryOptions(attempts=1),
+        ),
     )
 
 
 # The model that last answered, so later calls in the same process skip
 # models already found to be retired.
 _working_model = None
+
+# Answers that mean "this model, not this request": retired (404), out of
+# quota (429), or busy (500, 503). The next model is tried for these. A 504
+# (deadline exceeded) is treated like a timeout: no time is left to retry.
+_SKIP_CODES = {404, 429, 500, 503}
 
 
 def _transcribe_models():
@@ -161,35 +180,47 @@ def _transcribe_models():
 
 def _generate_with_fallback(client, contents, settings=None):
     """
-    Call Gemini's generate_content, moving to the next model only when the
-    API says the model does not exist (404). Any other error stops at once.
+    Call Gemini's generate_content, moving to the next model when one is
+    retired, out of quota or busy. Any other error (a bad or private video,
+    a bad key, a timeout) stops at once.
 
-    Returns (response, the model that answered).
+    Returns (response, the model that answered, [skipped models and why]).
     """
     global _working_model
     from google.genai import errors
 
-    not_found = []
+    skipped = []
     for model in _transcribe_models():
         try:
             response = client.models.generate_content(
                 model=model, contents=contents, config=settings
             )
         except errors.APIError as error:
-            if error.code == 404:
-                not_found.append(model)
+            if error.code == 504:
+                raise RuntimeError(
+                    "Gemini (" + model + ") did not answer in time. Try a shorter video."
+                ) from error
+            if error.code in _SKIP_CODES:
+                skipped.append({"model": model, "reason": str(error.code) + " " + str(error.status or "")})
                 continue
             raise RuntimeError(
                 "Gemini (" + model + ") answered " + str(error.code) + " "
                 + str(error.status or "") + ": " + str(error.message or error)
             ) from error
+        except Exception as error:
+            # Too slow: there is no time left in the function to try another.
+            if "Timeout" in type(error).__name__:
+                raise RuntimeError(
+                    "Gemini (" + model + ") did not answer in time. Try a shorter video."
+                ) from error
+            raise
         _working_model = model
-        return response, model
+        return response, model, skipped
 
     raise RuntimeError(
-        "No Gemini model answered on API " + config.GEMINI_API_VERSION
-        + " (not found: " + ", ".join(not_found) + "). "
-        "Set GEMINI_MODEL to a current model."
+        "No Gemini model answered on API " + config.GEMINI_API_VERSION + " ("
+        + ", ".join(s["model"] + ": " + s["reason"].strip() for s in skipped)
+        + "). Set GEMINI_MODEL to a current model."
     )
 
 
@@ -209,18 +240,24 @@ def verify_transcribe_model():
     try:
         from google.genai import types
 
-        client = _gemini_client(api_key)
+        client = _gemini_client(api_key, config.VERIFY_TIMEOUT_SECONDS)
         started = time.perf_counter()
-        _, model = _generate_with_fallback(
+        _, model, skipped = _generate_with_fallback(
             client,
             contents="Reply with OK.",
-            settings=types.GenerateContentConfig(max_output_tokens=16),
+            settings=types.GenerateContentConfig(
+                max_output_tokens=16,
+                thinking_config=types.ThinkingConfig(thinking_level=config.TRANSCRIBE_THINKING_LEVEL),
+            ),
         )
         latency_ms = round((time.perf_counter() - started) * 1000, 1)
     except Exception as error:  # the health check reports, it never crashes
         return {"ok": False, "model": config.TRANSCRIBE_MODEL, "error": str(error)[:300]}
 
-    return {"ok": True, "model": model, "latency_ms": latency_ms}
+    result = {"ok": True, "model": model, "latency_ms": latency_ms}
+    if skipped:
+        result["skipped"] = skipped
+    return result
 
 
 def _finish_reason(response):

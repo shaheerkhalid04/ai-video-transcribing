@@ -206,7 +206,8 @@ def install_fake_genai(monkeypatch, models):
     genai = types.ModuleType("google.genai")
     genai.Client = Client
     genai.types = SimpleNamespace(
-        HttpOptions=record, Content=record, Part=record, FileData=record, GenerateContentConfig=record
+        HttpOptions=record, HttpRetryOptions=record, Content=record, Part=record,
+        FileData=record, GenerateContentConfig=record, ThinkingConfig=record,
     )
     genai.errors = SimpleNamespace(APIError=FakeAPIError)
     google = types.ModuleType("google")
@@ -236,11 +237,65 @@ def test_transcription_falls_back_when_a_model_is_retired(monkeypatch):
 
     assert result["transcript"] == "hello world"
     assert models.calls == ["retired-model", "also-retired", "current-model"]
-    assert created[0].api_version == config.GEMINI_API_VERSION
+    options = created[0]
+    assert options.api_version == config.GEMINI_API_VERSION
+    # One attempt per call: the SDK's own retries could use up the 60 s limit.
+    assert options.retry_options.attempts == 1
+    assert options.timeout == config.TRANSCRIBE_TIMEOUT_SECONDS * 1000
 
     # The model that worked is tried first next time.
     tools.transcribe_video("https://www.youtube.com/watch?v=abcdefghijk")
     assert models.calls[-1] == "current-model" and len(models.calls) == 4
+
+
+def test_transcription_moves_on_from_a_busy_or_rate_limited_model(monkeypatch):
+    monkeypatch.setattr(config, "TRANSCRIBE_MODEL", "m1")
+    monkeypatch.setattr(config, "TRANSCRIBE_FALLBACK_MODELS", ["m2", "m3"])
+    models = FakeModels({
+        "m1": FakeAPIError(429, "RESOURCE_EXHAUSTED", "quota"),
+        "m2": FakeAPIError(503, "UNAVAILABLE", "overloaded"),
+        "m3": "hello",
+    })
+    install_fake_genai(monkeypatch, models)
+
+    assert tools.transcribe_video("https://www.youtube.com/watch?v=abcdefghijk")["transcript"] == "hello"
+    assert models.calls == ["m1", "m2", "m3"]
+
+
+def test_transcription_stops_when_gemini_times_out(monkeypatch):
+    monkeypatch.setattr(config, "TRANSCRIBE_MODEL", "m1")
+    monkeypatch.setattr(config, "TRANSCRIBE_FALLBACK_MODELS", ["m2"])
+    ReadTimeout = type("ReadTimeout", (Exception,), {})
+    slow_answers = [ReadTimeout("slow"), FakeAPIError(504, "DEADLINE_EXCEEDED", "deadline")]
+
+    for slow in slow_answers:
+        models = FakeModels({"m1": slow, "m2": "hello"})
+        install_fake_genai(monkeypatch, models)
+        try:
+            tools.transcribe_video("https://www.youtube.com/watch?v=abcdefghijk")
+        except RuntimeError as error:
+            assert "did not answer in time" in str(error)
+        else:
+            raise AssertionError("expected a RuntimeError")
+        # No time is left in the function, so no other model is tried.
+        assert models.calls == ["m1"]
+
+
+def test_transcription_asks_for_little_thinking(monkeypatch):
+    seen = []
+
+    class Recording(FakeModels):
+        def generate_content(self, model, contents, config=None):
+            seen.append(config)
+            return super().generate_content(model, contents, config)
+
+    monkeypatch.setattr(config, "TRANSCRIBE_MODEL", "m1")
+    install_fake_genai(monkeypatch, Recording({"m1": "hello"}))
+
+    tools.transcribe_video("https://www.youtube.com/watch?v=abcdefghijk")
+
+    assert seen[0].thinking_config.thinking_level == config.TRANSCRIBE_THINKING_LEVEL
+    assert seen[0].max_output_tokens == 32000
 
 
 def test_transcription_stops_on_errors_other_than_not_found(monkeypatch):
@@ -266,7 +321,7 @@ def test_transcription_names_every_missing_model(monkeypatch):
     try:
         tools.transcribe_video("https://www.youtube.com/watch?v=abcdefghijk")
     except RuntimeError as error:
-        assert "m1, m2" in str(error) and "GEMINI_MODEL" in str(error)
+        assert "m1: 404 NOT_FOUND, m2: 404 NOT_FOUND" in str(error) and "GEMINI_MODEL" in str(error)
     else:
         raise AssertionError("expected a RuntimeError")
 
@@ -274,15 +329,17 @@ def test_transcription_names_every_missing_model(monkeypatch):
 def test_verify_transcribe_model(monkeypatch):
     monkeypatch.setattr(config, "TRANSCRIBE_MODEL", "retired-model")
     monkeypatch.setattr(config, "TRANSCRIBE_FALLBACK_MODELS", ["current-model"])
-    install_fake_genai(monkeypatch, FakeModels({"current-model": "OK"}))
+    created = install_fake_genai(monkeypatch, FakeModels({"current-model": "OK"}))
 
     result = tools.verify_transcribe_model()
     assert result["ok"] is True and result["model"] == "current-model"
     assert isinstance(result["latency_ms"], float)
+    assert result["skipped"] == [{"model": "retired-model", "reason": "404 NOT_FOUND"}]
+    assert created[0].timeout == config.VERIFY_TIMEOUT_SECONDS * 1000
 
     install_fake_genai(monkeypatch, FakeModels({}))
     failed = tools.verify_transcribe_model()
-    assert failed["ok"] is False and "not found" in failed["error"]
+    assert failed["ok"] is False and "404 NOT_FOUND" in failed["error"]
 
     monkeypatch.delenv("GEMINI_API_KEY")
     assert tools.verify_transcribe_model()["ok"] is False

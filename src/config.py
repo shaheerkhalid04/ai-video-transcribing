@@ -20,20 +20,32 @@ MAX_VIDEO_SECONDS = int(os.environ.get("MAX_VIDEO_SECONDS", "300"))
 
 # The Gemini multimodal model that actually watches the video and writes the
 # transcript. It accepts a public YouTube URL directly. Override it with
-# GEMINI_MODEL. If Google retires a model (the API answers 404), the next one
-# in TRANSCRIBE_FALLBACK_MODELS is tried, so one retirement does not break
-# transcription.
-TRANSCRIBE_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+# GEMINI_MODEL. If the model is retired, out of quota or busy (404, 429, 500,
+# 503), the next one in TRANSCRIBE_FALLBACK_MODELS is tried.
+# Flash-Lite is the default because it answers in well under a second; on
+# 20 Nov 2026 gemini-3.8-flash and often gemini-3.6-flash took more than 10
+# seconds even for a one-line reply, too slow for the 60 second limit.
+TRANSCRIBE_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 TRANSCRIBE_FALLBACK_MODELS = [
     "gemini-3.6-flash",
-    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
     "gemini-flash-latest",
 ]
+
+# Transcribing needs no reasoning, so the model is asked to think little.
+TRANSCRIBE_THINKING_LEVEL = "low"
 
 # Gemini API version. Google documents YouTube URL input on v1beta, and the
 # "-latest" aliases are not served on v1, which the November 2026 SDKs call
 # by default. So the version is pinned here instead of left to the SDK.
 GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
+
+# How long one Gemini call may take. Past it the run stops, since there is no
+# time left in the function to try another model. The transcription gets most
+# of the 60 second limit; the health check needs only a short call (Gemini
+# rejects deadlines under 10 seconds).
+TRANSCRIBE_TIMEOUT_SECONDS = 40
+VERIFY_TIMEOUT_SECONDS = 12
 
 # The instruction we send to Gemini. We ask for a plain transcript only, so
 # the agent never has to "make up" a summary of the video on its own.

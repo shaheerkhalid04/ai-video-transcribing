@@ -179,7 +179,7 @@ locally still saves them to `knowledge_base/` as normal.
 | Variable            | Default               | What it does                                   |
 | ------------------- | --------------------- | ---------------------------------------------- |
 | `GROQ_MODEL`        | `openai/gpt-oss-120b` | The agent's tool-calling model                 |
-| `GEMINI_MODEL`      | `gemini-3.8-flash`    | The transcription model                        |
+| `GEMINI_MODEL`      | `gemini-3.5-flash-lite` | The transcription model                      |
 | `GEMINI_API_VERSION`| `v1beta`              | Gemini API version                             |
 | `MAX_VIDEO_SECONDS` | `300`                 | Longest video the search tool will pick        |
 
@@ -187,12 +187,20 @@ Groq retired `llama-3.3-70b-versatile` on 16 Aug 2026, so the default is now
 `openai/gpt-oss-120b`. It reasons before answering, so the agent asks for low
 reasoning effort and never sends that reasoning back on the next step.
 
-If Gemini answers 404 for the transcription model (it was retired), the
-fallbacks in `src/config.py` are tried in order: `gemini-3.6-flash`,
-`gemini-3.5-flash-lite`, then the `gemini-flash-latest` alias. Any other
-error stops at once. The API version is pinned because the November 2026
-Gemini SDKs call `v1` by default, which does not serve the `-latest` aliases,
-and YouTube URL input is documented on `v1beta`.
+If Gemini says the transcription model is retired, out of quota or busy
+(404, 429, 500 or 503), the fallbacks in `src/config.py` are tried in order:
+`gemini-3.6-flash`, `gemini-3.8-flash`, then the `gemini-flash-latest`
+alias. Any other error stops at once, and so does a call that runs past its
+deadline, since the function has no time left to try another model. Each call
+is made once (the SDK's own retries with growing pauses could use up the whole
+60 seconds) and asks the model to think little, since transcribing needs no
+reasoning.
+
+Flash-Lite is the default because it answers in well under a second. On
+20 Nov 2026 `gemini-3.8-flash`, and often `gemini-3.6-flash`, took more
+than 10 seconds even for a one-line reply. The API version is pinned because
+the November 2026 Gemini SDKs call `v1` by default, which does not serve the
+`-latest` aliases, and YouTube URL input is documented on `v1beta`.
 
 If the transcription fails, the run ends there with the error instead of
 searching for more videos, and `/run` answers 502 with the error and the
@@ -205,7 +213,8 @@ steps so far.
   and one to the Gemini model. It returns `{"ok": true, "model": ...,
   "latency_ms": ..., "transcribe": {"ok": true, "model": ..., "latency_ms":
   ...}}`. `ok` is false if either model cannot be reached, with the reason
-  in `error` (Groq) or `transcribe.error` (Gemini).
+  in `error` (Groq) or `transcribe.error` (Gemini). If Gemini had to fall
+  back, `transcribe.skipped` lists each model passed over and why.
 
 ## Tests
 
