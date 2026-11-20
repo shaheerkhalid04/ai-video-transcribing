@@ -179,18 +179,33 @@ locally still saves them to `knowledge_base/` as normal.
 | Variable            | Default               | What it does                                   |
 | ------------------- | --------------------- | ---------------------------------------------- |
 | `GROQ_MODEL`        | `openai/gpt-oss-120b` | The agent's tool-calling model                 |
+| `GEMINI_MODEL`      | `gemini-3.8-flash`    | The transcription model                        |
+| `GEMINI_API_VERSION`| `v1beta`              | Gemini API version                             |
 | `MAX_VIDEO_SECONDS` | `300`                 | Longest video the search tool will pick        |
 
 Groq retired `llama-3.3-70b-versatile` on 16 Aug 2026, so the default is now
 `openai/gpt-oss-120b`. It reasons before answering, so the agent asks for low
 reasoning effort and never sends that reasoning back on the next step.
 
+If Gemini answers 404 for the transcription model (it was retired), the
+fallbacks in `src/config.py` are tried in order: `gemini-3.6-flash`,
+`gemini-3.5-flash-lite`, then the `gemini-flash-latest` alias. Any other
+error stops at once. The API version is pinned because the November 2026
+Gemini SDKs call `v1` by default, which does not serve the `-latest` aliases,
+and YouTube URL input is documented on `v1beta`.
+
+If the transcription fails, the run ends there with the error instead of
+searching for more videos, and `/run` answers 502 with the error and the
+steps so far.
+
 ### Health check
 
-- `GET /api/health` says the server is up and which model it is set to use.
-- `GET /api/health?verify=1` also makes one tiny real call to that model and
-  returns `{"ok": true, "model": ..., "latency_ms": ...}`, or `ok: false` with
-  the error name if the model cannot be reached.
+- `GET /api/health` says the server is up and which models it is set to use.
+- `GET /api/health?verify=1` also makes one tiny real call to the Groq model
+  and one to the Gemini model. It returns `{"ok": true, "model": ...,
+  "latency_ms": ..., "transcribe": {"ok": true, "model": ..., "latency_ms":
+  ...}}`. `ok` is false if either model cannot be reached, with the reason
+  in `error` (Groq) or `transcribe.error` (Gemini).
 
 ## Tests
 
@@ -209,5 +224,5 @@ The tests replace Groq and SerpApi with fakes, so they need no keys.
   transcript of some very popular videos whose captions it already knows. If
   that happens the tool says so clearly — just pick a shorter or less
   well-known video.
-- `gemini-flash-latest` is used so the code keeps working when a specific
-  model version is retired.
+- The Gemini model falls back to the next one in the list when a specific
+  model version is retired (see Optional settings).

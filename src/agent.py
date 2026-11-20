@@ -106,6 +106,12 @@ def run_agent(user_request, verbose=True):
                     print("    -> ERROR: " + str(error))
 
             steps.append(record)
+
+            # A failed transcription ends the run. Searching again cannot fix
+            # a Gemini problem; it only burns steps and search credits.
+            if name == "transcribe_video" and not record["ok"]:
+                message = "Could not transcribe the video. " + str(result["error"])
+                return {"answer": message, "error": message, "steps": steps, "source": source}
             messages.append(
                 {
                     "role": "tool",

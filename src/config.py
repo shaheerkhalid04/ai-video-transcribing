@@ -19,10 +19,21 @@ AGENT_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 MAX_VIDEO_SECONDS = int(os.environ.get("MAX_VIDEO_SECONDS", "300"))
 
 # The Gemini multimodal model that actually watches the video and writes the
-# transcript. This model accepts a public YouTube URL directly.
-# "gemini-flash-latest" always points at the current fast Gemini model, so
-# the code keeps working when a specific version is retired.
-TRANSCRIBE_MODEL = "gemini-flash-latest"
+# transcript. It accepts a public YouTube URL directly. Override it with
+# GEMINI_MODEL. If Google retires a model (the API answers 404), the next one
+# in TRANSCRIBE_FALLBACK_MODELS is tried, so one retirement does not break
+# transcription.
+TRANSCRIBE_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+TRANSCRIBE_FALLBACK_MODELS = [
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-flash-latest",
+]
+
+# Gemini API version. Google documents YouTube URL input on v1beta, and the
+# "-latest" aliases are not served on v1, which the November 2026 SDKs call
+# by default. So the version is pinned here instead of left to the SDK.
+GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
 
 # The instruction we send to Gemini. We ask for a plain transcript only, so
 # the agent never has to "make up" a summary of the video on its own.

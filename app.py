@@ -23,6 +23,7 @@ from flask import Flask, render_template, request, jsonify
 
 import agent
 import config
+import tools
 
 # Load the API keys from .env before the agent needs them.
 load_dotenv()
@@ -39,18 +40,25 @@ def index():
 @app.route("/health")
 @app.route("/api/health")
 def health():
-    """Liveness by default; ?verify=1 also makes one real call to the agent model.
+    """Liveness by default; ?verify=1 also makes one tiny real call to each model.
 
-    A plain 200 only says the server is up. The portfolio treats the demo as
-    live only when verify returns ok with latency_ms.
+    A plain 200 only says the server is up. With verify, "ok" is true only
+    when both the Groq agent model and the Gemini transcription model answer,
+    so a retired model of either kind shows up as ok: false. The portfolio
+    treats the demo as live only when verify returns ok with latency_ms.
     """
     body = {
         "ok": True,
         "model": config.AGENT_MODEL,
+        "transcribe_model": config.TRANSCRIBE_MODEL,
         "max_video_seconds": config.MAX_VIDEO_SECONDS,
     }
     if request.args.get("verify") == "1":
-        body = {**body, **agent.verify_model()}
+        groq = agent.verify_model()
+        gemini = tools.verify_transcribe_model()
+        body = {**body, **groq, "transcribe": gemini}
+        body["ok"] = bool(groq["ok"] and gemini["ok"])
+        body["transcribe_model"] = gemini["model"]
     return jsonify(body)
 
 
@@ -71,6 +79,9 @@ def run():
         # Send the reason back so the page can show it.
         return jsonify({"error": str(error)}), 500
 
+    if result.get("error"):
+        # The transcription failed; the page shows the error with the steps.
+        return jsonify(result), 502
     return jsonify(result)
 
 

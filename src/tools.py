@@ -89,7 +89,6 @@ def transcribe_video(url):
     """
     # Imported here so the script still starts even if the library is only
     # needed for this one tool.
-    from google import genai
     from google.genai import types
 
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -99,20 +98,20 @@ def transcribe_video(url):
             "Copy .env.example to .env and paste in your key."
         )
 
-    client = genai.Client(api_key=api_key)
+    client = _gemini_client(api_key)
 
     # We hand Gemini the YouTube URL directly (as a "file" part) plus our
     # transcription instruction, and let its multimodal model do the work.
     # A big output limit leaves room for a long transcript.
-    response = client.models.generate_content(
-        model=config.TRANSCRIBE_MODEL,
+    response, _ = _generate_with_fallback(
+        client,
         contents=types.Content(
             parts=[
                 types.Part(file_data=types.FileData(file_uri=url)),
                 types.Part(text=config.TRANSCRIBE_PROMPT),
             ]
         ),
-        config=types.GenerateContentConfig(max_output_tokens=32000),
+        settings=types.GenerateContentConfig(max_output_tokens=32000),
     )
 
     transcript = (response.text or "").strip()
@@ -134,6 +133,94 @@ def transcribe_video(url):
 
     saved_to = save_transcript(url, transcript)
     return {"url": url, "transcript": transcript, "saved_to": saved_to}
+
+
+def _gemini_client(api_key):
+    """A Gemini client on the pinned API version (config.GEMINI_API_VERSION)."""
+    from google import genai
+    from google.genai import types
+
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(api_version=config.GEMINI_API_VERSION),
+    )
+
+
+# The model that last answered, so later calls in the same process skip
+# models already found to be retired.
+_working_model = None
+
+
+def _transcribe_models():
+    """The model that last worked, then the configured one, then the fallbacks."""
+    models = [_working_model, config.TRANSCRIBE_MODEL] + list(
+        config.TRANSCRIBE_FALLBACK_MODELS
+    )
+    return [m for m in dict.fromkeys(models) if m]
+
+
+def _generate_with_fallback(client, contents, settings=None):
+    """
+    Call Gemini's generate_content, moving to the next model only when the
+    API says the model does not exist (404). Any other error stops at once.
+
+    Returns (response, the model that answered).
+    """
+    global _working_model
+    from google.genai import errors
+
+    not_found = []
+    for model in _transcribe_models():
+        try:
+            response = client.models.generate_content(
+                model=model, contents=contents, config=settings
+            )
+        except errors.APIError as error:
+            if error.code == 404:
+                not_found.append(model)
+                continue
+            raise RuntimeError(
+                "Gemini (" + model + ") answered " + str(error.code) + " "
+                + str(error.status or "") + ": " + str(error.message or error)
+            ) from error
+        _working_model = model
+        return response, model
+
+    raise RuntimeError(
+        "No Gemini model answered on API " + config.GEMINI_API_VERSION
+        + " (not found: " + ", ".join(not_found) + "). "
+        "Set GEMINI_MODEL to a current model."
+    )
+
+
+def verify_transcribe_model():
+    """One real, tiny call to the Gemini model, for the health check.
+
+    Returns {"ok": True, "model", "latency_ms"} when a model answers, and
+    {"ok": False, "model", "error"} when none does (missing key, every model
+    retired). It never raises, so the health route stays a 200.
+    """
+    import time
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return {"ok": False, "model": config.TRANSCRIBE_MODEL, "error": "GEMINI_API_KEY is not set."}
+
+    try:
+        from google.genai import types
+
+        client = _gemini_client(api_key)
+        started = time.perf_counter()
+        _, model = _generate_with_fallback(
+            client,
+            contents="Reply with OK.",
+            settings=types.GenerateContentConfig(max_output_tokens=16),
+        )
+        latency_ms = round((time.perf_counter() - started) * 1000, 1)
+    except Exception as error:  # the health check reports, it never crashes
+        return {"ok": False, "model": config.TRANSCRIBE_MODEL, "error": str(error)[:300]}
+
+    return {"ok": True, "model": model, "latency_ms": latency_ms}
 
 
 def _finish_reason(response):
