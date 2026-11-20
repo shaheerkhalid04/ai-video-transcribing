@@ -51,9 +51,7 @@ only ever transcribes the video it actually searched for.
 
 ```
 ai-video-transcribing/
-├── app.py                     # web frontend (Flask)
-├── api/
-│   └── index.py               # entry point used when hosted on Vercel
+├── app.py                     # web frontend (Flask), also the Vercel entry point
 ├── vercel.json                # hosting config
 ├── templates/
 │   └── index.html             # the page
@@ -164,8 +162,9 @@ The app is hosted on Vercel at
    vercel env add SERPAPI_API_KEY production
    ```
 
-`api/index.py` is the entry point Vercel uses, and `vercel.json` routes every
-request to it. Because hosted filesystems are read-only, transcripts are
+The project uses Vercel's Flask preset, which serves the `app` in `app.py` and
+sends every request to it; `vercel.json` only sets its 60 second limit and the
+folders to bundle. Because hosted filesystems are read-only, transcripts are
 written to a temporary folder there instead of `knowledge_base/`; running
 locally still saves them to `knowledge_base/` as normal.
 
