@@ -6,16 +6,46 @@ simple. If you want to swap a model or change the wording of a prompt, this
 is the only file you need to touch.
 """
 
+import os
+
 # The Groq model that acts as the agent's "brain". It reads the request,
 # decides which tool to call, and writes the final answer. It must be a
 # model that supports tool calling. See https://console.groq.com/docs/tool-use
-AGENT_MODEL = "llama-3.3-70b-versatile"
+# Groq retired llama-3.3-70b-versatile on 16 Aug 2026; override with GROQ_MODEL.
+AGENT_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
+
+# Only videos at most this long are picked, so a transcription fits inside the
+# serverless time limit.
+MAX_VIDEO_SECONDS = int(os.environ.get("MAX_VIDEO_SECONDS", "300"))
 
 # The Gemini multimodal model that actually watches the video and writes the
-# transcript. This model accepts a public YouTube URL directly.
-# "gemini-flash-latest" always points at the current fast Gemini model, so
-# the code keeps working when a specific version is retired.
-TRANSCRIBE_MODEL = "gemini-flash-latest"
+# transcript. It accepts a public YouTube URL directly. Override it with
+# GEMINI_MODEL. If the model is retired, out of quota or busy (404, 429, 500,
+# 503), the next one in TRANSCRIBE_FALLBACK_MODELS is tried.
+# Flash-Lite is the default because it answers in well under a second; on
+# 20 Nov 2026 gemini-3.8-flash and often gemini-3.6-flash took more than 10
+# seconds even for a one-line reply, too slow for the 60 second limit.
+TRANSCRIBE_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
+TRANSCRIBE_FALLBACK_MODELS = [
+    "gemini-3.6-flash",
+    "gemini-3.8-flash",
+    "gemini-flash-latest",
+]
+
+# Transcribing needs no reasoning, so the model is asked to think little.
+TRANSCRIBE_THINKING_LEVEL = "low"
+
+# Gemini API version. Google documents YouTube URL input on v1beta, and the
+# "-latest" aliases are not served on v1, which the November 2026 SDKs call
+# by default. So the version is pinned here instead of left to the SDK.
+GEMINI_API_VERSION = os.environ.get("GEMINI_API_VERSION", "v1beta")
+
+# How long one Gemini call may take. Past it the run stops, since there is no
+# time left in the function to try another model. The transcription gets most
+# of the 60 second limit; the health check needs only a short call (Gemini
+# rejects deadlines under 10 seconds).
+TRANSCRIBE_TIMEOUT_SECONDS = 40
+VERIFY_TIMEOUT_SECONDS = 12
 
 # The instruction we send to Gemini. We ask for a plain transcript only, so
 # the agent never has to "make up" a summary of the video on its own.

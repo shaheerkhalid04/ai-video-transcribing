@@ -48,6 +48,10 @@ def main():
 
     result = agent.run_agent(user_request)
 
+    if result.get("error"):
+        print("\n" + result["error"])
+        sys.exit(1)
+
     print("\n" + "=" * 60)
     print("FINAL ANSWER (transcript + source)")
     print("=" * 60)

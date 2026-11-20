@@ -57,7 +57,7 @@ def run_agent(user_request, verbose=True):
 
         # Remember what the agent said (including any tool calls) so the next
         # request keeps the full conversation.
-        messages.append(message)
+        messages.append(_replayable(message))
 
         # No tool calls means the agent is done and this is the answer.
         if not message.tool_calls:
@@ -106,6 +106,12 @@ def run_agent(user_request, verbose=True):
                     print("    -> ERROR: " + str(error))
 
             steps.append(record)
+
+            # A failed transcription ends the run. Searching again cannot fix
+            # a Gemini problem; it only burns steps and search credits.
+            if name == "transcribe_video" and not record["ok"]:
+                message = "Could not transcribe the video. " + str(result["error"])
+                return {"answer": message, "error": message, "steps": steps, "source": source}
             messages.append(
                 {
                     "role": "tool",
@@ -125,6 +131,65 @@ def run_agent(user_request, verbose=True):
     }
 
 
+def _reasoning_kwargs():
+    """gpt-oss models reason before answering; low effort keeps each step quick.
+    Sent as extra_body so it works on every groq SDK version."""
+    if config.AGENT_MODEL.startswith("openai/gpt-oss"):
+        return {"extra_body": {"reasoning_effort": "low"}}
+    return {}
+
+
+def _replayable(message):
+    """The assistant turn as a plain dict: content and tool calls only, so the
+    model's private reasoning is never sent back on the next step."""
+    data = {"role": "assistant", "content": message.content or ""}
+    if message.tool_calls:
+        data["tool_calls"] = [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {
+                    "name": call.function.name,
+                    "arguments": call.function.arguments or "{}",
+                },
+            }
+            for call in message.tool_calls
+        ]
+    return data
+
+
+def verify_model():
+    """One real, tiny call to the agent model, for the health check.
+
+    Returns {"ok": True, "model", "latency_ms"} when the model answers, and
+    {"ok": False, "model", "error"} when it does not (missing key, retired
+    model, rate limit). It never raises, so the health route stays a 200.
+    """
+    import time
+
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        return {"ok": False, "model": config.AGENT_MODEL, "error": "GROQ_API_KEY is not set."}
+
+    try:
+        from groq import Groq
+
+        client = Groq(api_key=api_key)
+        started = time.perf_counter()
+        # Reasoning tokens count against max_tokens, so leave room for them.
+        client.chat.completions.create(
+            model=config.AGENT_MODEL,
+            max_tokens=64,
+            messages=[{"role": "user", "content": "Reply with OK."}],
+            **_reasoning_kwargs(),
+        )
+        latency_ms = round((time.perf_counter() - started) * 1000, 1)
+    except Exception as error:  # the health check reports, it never crashes
+        return {"ok": False, "model": config.AGENT_MODEL, "error": type(error).__name__}
+
+    return {"ok": True, "model": config.AGENT_MODEL, "latency_ms": latency_ms}
+
+
 def _chat_with_retry(client, messages, attempts=3):
     """
     Ask Groq for the next step, retrying a couple of times.
@@ -142,6 +207,7 @@ def _chat_with_retry(client, messages, attempts=3):
                 messages=messages,
                 tools=tools.TOOLS,
                 tool_choice="auto",
+                **_reasoning_kwargs(),
             )
         except BadRequestError as error:
             if "tool_use_failed" in str(error) and attempt < attempts - 1:

@@ -51,9 +51,7 @@ only ever transcribes the video it actually searched for.
 
 ```
 ai-video-transcribing/
-├── app.py                     # web frontend (Flask)
-├── api/
-│   └── index.py               # entry point used when hosted on Vercel
+├── app.py                     # web frontend (Flask), also the Vercel entry point
 ├── vercel.json                # hosting config
 ├── templates/
 │   └── index.html             # the page
@@ -164,14 +162,67 @@ The app is hosted on Vercel at
    vercel env add SERPAPI_API_KEY production
    ```
 
-`api/index.py` is the entry point Vercel uses, and `vercel.json` routes every
-request to it. Because hosted filesystems are read-only, transcripts are
+The project uses Vercel's Flask preset, which serves the `app` in `app.py` and
+sends every request to it; `vercel.json` only sets its 60 second limit and the
+folders to bundle. Because hosted filesystems are read-only, transcripts are
 written to a temporary folder there instead of `knowledge_base/`; running
 locally still saves them to `knowledge_base/` as normal.
 
 > **Note on hosting limits:** a Vercel function can run for up to 60 seconds
-> on the free plan. Short videos finish comfortably; a long video can hit
-> that limit, and the page will say so. Running locally has no time limit.
+> on the free plan. That is why the search tool only picks a video of
+> `MAX_VIDEO_SECONDS` or less (300, so 5 minutes, by default) and skips any
+> result whose length SerpApi does not report. Running locally has no time
+> limit, so raise it there if you like.
+
+### Optional settings
+
+| Variable            | Default               | What it does                                   |
+| ------------------- | --------------------- | ---------------------------------------------- |
+| `GROQ_MODEL`        | `openai/gpt-oss-120b` | The agent's tool-calling model                 |
+| `GEMINI_MODEL`      | `gemini-3.5-flash-lite` | The transcription model                      |
+| `GEMINI_API_VERSION`| `v1beta`              | Gemini API version                             |
+| `MAX_VIDEO_SECONDS` | `300`                 | Longest video the search tool will pick        |
+
+Groq retired `llama-3.3-70b-versatile` on 16 Aug 2026, so the default is now
+`openai/gpt-oss-120b`. It reasons before answering, so the agent asks for low
+reasoning effort and never sends that reasoning back on the next step.
+
+If Gemini says the transcription model is retired, out of quota or busy
+(404, 429, 500 or 503), the fallbacks in `src/config.py` are tried in order:
+`gemini-3.6-flash`, `gemini-3.8-flash`, then the `gemini-flash-latest`
+alias. Any other error stops at once, and so does a call that runs past its
+deadline, since the function has no time left to try another model. Each call
+is made once (the SDK's own retries with growing pauses could use up the whole
+60 seconds) and asks the model to think little, since transcribing needs no
+reasoning.
+
+Flash-Lite is the default because it answers in well under a second. On
+20 Nov 2026 `gemini-3.8-flash`, and often `gemini-3.6-flash`, took more
+than 10 seconds even for a one-line reply. The API version is pinned because
+the November 2026 Gemini SDKs call `v1` by default, which does not serve the
+`-latest` aliases, and YouTube URL input is documented on `v1beta`.
+
+If the transcription fails, the run ends there with the error instead of
+searching for more videos, and `/run` answers 502 with the error and the
+steps so far.
+
+### Health check
+
+- `GET /api/health` says the server is up and which models it is set to use.
+- `GET /api/health?verify=1` also makes one tiny real call to the Groq model
+  and one to the Gemini model. It returns `{"ok": true, "model": ...,
+  "latency_ms": ..., "transcribe": {"ok": true, "model": ..., "latency_ms":
+  ...}}`. `ok` is false if either model cannot be reached, with the reason
+  in `error` (Groq) or `transcribe.error` (Gemini). If Gemini had to fall
+  back, `transcribe.skipped` lists each model passed over and why.
+
+## Tests
+
+```
+python -m pytest -q
+```
+
+The tests replace Groq and SerpApi with fakes, so they need no keys.
 
 ## Notes
 
@@ -182,5 +233,5 @@ locally still saves them to `knowledge_base/` as normal.
   transcript of some very popular videos whose captions it already knows. If
   that happens the tool says so clearly — just pick a shorter or less
   well-known video.
-- `gemini-flash-latest` is used so the code keeps working when a specific
-  model version is retired.
+- The Gemini model falls back to the next one in the list when a specific
+  model version is retired (see Optional settings).
